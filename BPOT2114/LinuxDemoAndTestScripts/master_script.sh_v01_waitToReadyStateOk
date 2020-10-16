@@ -1,0 +1,187 @@
+#!/bin/ksh
+
+
+getJobNumber(){
+oralog=`pwd`/`basename $0`.getJobNumber.$$.`timestamp`.log
+
+sql2run="select count(*)  from rt_job_info"
+
+$echo -e "sql2run=$sql2run\n"
+
+# Execute sql
+sqlplus -s $CONNSTRG >> $oralog << ZZZ
+    set head off;
+    $sql2run;
+ZZZ
+
+# Check for sql errors
+if [ -n "`cat $oralog | grep ORA-`" ]; then
+    echo -e "\nERROR: Found ORA- error(s) in $oralog"
+    cat $oralog
+    echo -e "\nScript exiting...\n"
+    /bin/rm -f $oralog
+    exit 1
+fi
+
+retvalue=`cat $oralog`
+
+
+/bin/rm -f $oralog
+job_number=$retvalue
+
+}
+
+
+getJobInfo(){
+oralog=`pwd`/`basename $0`.getJobInfo.$$.`timestamp`.log
+
+sql2run="select job_id||'~'||job_type||'~'||job_name||'~'||qualifier||'~'||predecessor_ids||'~'||oneorall_predecessor||'~'||successor_ids||'~'||schedule_time||'~'||state||'~'||tag_for_wait_states||'~'||tag_for_run_states||'~'||agent_name||'~'||script||'~'||arguments_of_script from rt_job_info  where TO_NUMBER(job_id)=$1"
+
+#echo -e "sql2run=$sql2run\n"
+
+# Execute sql
+sqlplus -s $CONNSTRG >> $oralog << ZZZ
+    set head off;
+    $sql2run;
+ZZZ
+
+# Check for sql errors
+if [ -n "`cat $oralog | grep ORA-`" ]; then
+    echo -e "\nERROR: Found ORA- error(s) in $oralog"
+    cat $oralog
+    echo -e "\nScript exiting...\n"
+    /bin/rm -f $oralog
+    exit 1
+fi
+
+retvalue=`cat $oralog`
+
+
+/bin/rm -f $oralog
+job_info=$retvalue
+
+}
+
+process_wait_state(){
+echo " [01] when job state is 01 ... process_wait_state..."
+# there are many checks here : hold/release, check time/time arrived 
+# now only check the predecessors 
+#
+echo "..............within check the predecessor states..........."
+predecessor_ids=`echo $job_info|awk -F~ '{print $5}'`
+
+#echo "predecessor ids: $predecessor_ids"
+#if all predecessor  completed,then set job state to ready06 
+
+separated_predecessor_ids=`echo $predecessor_ids|sed 's/,/ /g'`
+#echo "separated predecessor_ids are: $separated_predecessor_ids"
+all_completed=0
+for item in $separated_predecessor_ids
+do 
+    echo "predecessor of job $1 is :  $item " 
+   #check the state of all predecessor if completed 
+    check_if_job_completed $item
+    #echo "... new value is $new_value ..."
+    ##all_completed=` expr $all_completed + $new_value ` 
+done  
+
+echo "....... value of all_completed of predecessor is: ...$all_completed..." 
+if [ $all_completed -eq 0 ]; then
+   echo "all predecessor of job $icount completed, ready to set the ready state:"
+   set_job__state $icount 06 
+fi
+}
+set_job__state(){
+oralog=`pwd`/`basename $0`.set_job__state.$$.`timestamp`.log
+
+sql2run="update rt_job_info set state='$2'  where TO_NUMBER(job_id)=$1"
+
+echo -e "sql2run=$sql2run\n"
+
+# Execute sql
+sqlplus -s $CONNSTRG >> $oralog << ZZZ
+    set head off;
+    $sql2run;
+ZZZ
+
+# Check for sql errors
+if [ -n "`cat $oralog | grep ORA-`" ]; then
+    echo -e "\nERROR: Found ORA- error(s) in $oralog"
+    cat $oralog
+    echo -e "\nScript exiting...\n"
+    /bin/rm -f $oralog
+    exit 1
+fi
+
+retvalue=`cat $oralog`
+
+
+/bin/rm -f $oralog
+ 
+}
+
+check_if_job_completed(){
+
+oralog=`pwd`/`basename $0`.check_if_job_completed.$$.`timestamp`.log
+
+sql2run="select count(*) from  rt_job_info where  TO_NUMBER(job_id)=$1 and state <> 20"  
+ # now temp exclude state 15 which is fake complete
+
+#echo -e "sql2run=$sql2run\n"
+
+# Execute sql
+sqlplus -s $CONNSTRG >> $oralog << ZZZ
+    set head off;
+    $sql2run;
+ZZZ
+
+# Check for sql errors
+if [ -n "`cat $oralog | grep ORA-`" ]; then
+    echo -e "\nERROR: Found ORA- error(s) in $oralog"
+    cat $oralog
+    echo -e "\nScript exiting...\n"
+    /bin/rm -f $oralog
+    exit 1
+fi
+
+retvalue=`cat $oralog`
+
+
+/bin/rm -f $oralog
+
+echo " .... all_completed is $all_completed and retValue of query is: $retvalue "
+all_completed=` expr $all_completed + $retvalue ` 
+           # if one incomplete then the value will be gt 0  
+return $retvalue
+}
+
+
+echo 
+all_completed=0
+CONNSTRG="pin211/pin211@brm"
+getJobNumber
+#echo "the job count is : $job_number"
+
+icount=0
+while [ $icount -lt $job_number ]
+do 
+icount=` expr $icount + 1 `
+#echo $icount 
+echo "the job counti(job id)  is : $icount"
+
+getJobInfo $icount
+#echo $job_info
+
+job_state=`echo $job_info|awk -F~ '{print $9}'`
+echo "job state is: $job_state"
+
+case $job_state in 
+01) process_wait_state ;;
+06);;
+10);;
+11);;
+20);;
+*);;
+esac
+
+done 
